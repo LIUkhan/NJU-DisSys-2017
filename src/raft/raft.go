@@ -24,6 +24,7 @@ import "time"
  import "math/rand"
  import "encoding/gob"
  import "sync/atomic"
+//  import "fmt"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -105,8 +106,6 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here.
-	rf.mu.Lock() 
-	defer rf.mu.Unlock() //函数返回前解锁
 	term = rf.currentTerm
 	isleader = (rf.state == Leader)
 	return term, isleader
@@ -120,6 +119,8 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here.
 	// Example:
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -131,12 +132,10 @@ func (rf *Raft) persist() {
 
 //
 // restore previously persisted state.
-//
+//make里面加过锁了，这里不需要再加，否则死锁
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here.
 	// Example:
-	rf.mu.Lock() 
-	defer rf.mu.Unlock() //函数返回前解锁
 	if data == nil || len(data) < 1 {
 		return
 	}
@@ -186,11 +185,9 @@ type AppendEntriesReply struct	{
 //接受到该RPC的server的处理
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here.
-	rf.mu.Lock() 
-	defer rf.mu.Unlock() //函数返回前解锁
 	defer rf.persist()
-
 	logcheck	:=	 true
+	rf.mu.Lock() 
     if len(rf.logs) > 0 {
 		//日志安全性检查
 		//最新的日志的任期号要小于候选者的，等于的情况下要长度要小，否则candidate886
@@ -220,6 +217,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = args.Term
 		reply.VoteGranted = (rf.votedFor == args.CandidateID)
 	}
+	rf.mu.Unlock()
 	return
 }
 
@@ -236,14 +234,17 @@ func (rf *Raft) leaderElection()	{
 		len(rf.logs) - 1,
 		rf.logs[len(rf.logs)-1].Term,
 	}
+	num := len(rf.peers)
 	rf.mu.Unlock()
 
 	var votes_sum int32
 	votes_sum = 0
 
-	for i := 0; i < len(rf.peers); i++ {
+	for i := 0; i < num; i++ {
 		if i == rf.me {
+			rf.mu.Lock()
 			rf.votedFor = rf.me
+			rf.mu.Unlock()
 			atomic.AddInt32(&votes_sum, 1)
 			continue
 		}
@@ -365,6 +366,7 @@ func (rf *Raft) LogReplication()	{
 					//第二个限制是为了防止图8的问题）旧的已经复制到大多数服务器的日志被覆盖
 					if rf.repliNum	>	threhold  && rf.logs[server].Term == rf.currentTerm	{
 						rf.commitIndex = rf.updateCommitIndex()
+						rf.mu.Unlock()
 						rf.applyLog()
 					}
 				}	else	{
@@ -378,9 +380,9 @@ func (rf *Raft) LogReplication()	{
 							rf.nextIndex[server]--//这样可以做到已经存在的日志条目和新的产生冲突（索引值相同但是任期号不同），删除这一条和之后所有的 
 						}							
 					}
+					rf.mu.Unlock()
 				}
 				rf.persist()
-				rf.mu.Unlock()
 			}
 		}(i,rf)
 	}
@@ -434,7 +436,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index :=  -1
 	term := rf.currentTerm
 	isLeader := (rf.state == Leader)
-
+	// var index,term int
+	// var isLeader bool
 	if isLeader {
 			index =  len(rf.logs) 
 			entry := LogEntry{
@@ -442,6 +445,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				Command: command,
 			}
 			rf.logs = append(rf.logs, entry)
+			rf.matchIndex[rf.me] = index
+			rf.nextIndex[rf.me] = index + 1
 			rf.persist()
 			rf.LogReplication()
 	}
@@ -525,6 +530,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						server.leaderElection()
 					}
 					server.mu.Unlock()
+					// fmt.Println("electionTImeout")
 				}	
 				case <-server.broadcastTimeout.C:	{
 					server.mu.Lock()
@@ -533,6 +539,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						server.broadcastTimeout.Reset(broadcastTime)
 					}
 					server.mu.Unlock()
+					// fmt.Println("broadcastTImeout")
 				}
 			}
 		}
@@ -541,9 +548,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
+//外面需要加锁
 func (rf *Raft) updateCommitIndex() int{
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	for i := len(rf.logs) - 1; i > rf.commitIndex; i-- {
 		support := 0
 		for _, matchIndex := range rf.matchIndex {
@@ -560,26 +566,33 @@ func (rf *Raft) updateCommitIndex() int{
 	return rf.commitIndex
 }
 
-// 对于所有服务器都需要执行的
+// 对于所有服务器都需要执行的,执行前外部需要解锁
 func (rf *Raft) applyLog() {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	//注意这里的for循环，如果写成if那就错了，会无法通过lab-2B的测试。
-	for rf.commitIndex > rf.lastApplied {
-		rf.lastApplied++
-		entry := rf.logs[rf.lastApplied]
-		msg := ApplyMsg{
-			Index:   rf.lastApplied,
-			Command: entry.Command,
-		}
-		rf.applyCh <- msg //applyCh在test_test.go中要用到
-	}
+	if(rf.commitIndex > rf.lastApplied)	{
+		entriesToApply := append([]LogEntry{}, rf.logs[rf.lastApplied+1:rf.commitIndex+1]...)
+		beginningIdx := rf.lastApplied+1
+		rf.mu.Unlock()
+		go func(beginningIdx int,entries []LogEntry,rf *Raft)	{
+			for idx,entry := range entries	{
+				msg := ApplyMsg{
+					Index:   beginningIdx+idx,
+					Command: entry.Command,
+				}
+				rf.applyCh <- msg 
+				rf.mu.Lock()
+				if rf.lastApplied < msg.Index {
+					rf.lastApplied = msg.Index
+				}
+				rf.mu.Unlock()
+			}
+		}(beginningIdx,entriesToApply,rf)
+	}	
 }
 
 //状态、时钟、candidate任期、投票状态、领导人初始化nextindex和matchindex
+//外界上锁
 func (rf *Raft) convertState (state uint)	{
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	defer rf.persist()
 	if state == rf.state {
 		return
