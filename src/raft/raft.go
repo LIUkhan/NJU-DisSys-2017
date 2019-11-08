@@ -288,17 +288,22 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	//接受到该RPC后重置选举超时
 	electionTime := RandElectionTimeout()
 	rf.electionTimeout.Reset(electionTime)
-	//排除第一次发送日志没有prevlogterm的情况
+	//根据图7的情况，有可能少了很多份日志，也有可能多了
+	lastLogIndex := len(rf.logs) - 1
+	if lastLogIndex < args.PrevLogIndex	{
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
+	}
+	//排除第一次发送日志没有prevlogterm的情况，多了和不匹配的情况处理如下
 	if	args.PrevLogTerm != 0 && args.PrevLogTerm != rf.logs[args.PrevLogIndex].Term	{
-		reply.Term = rf.logs[args.PrevLogIndex].Term
+		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
 	reply.Term = rf.currentTerm
 	reply.Success = true
-	for i := 0; i < len(args.Entries) ; i++	{
-		rf.logs[args.PrevLogIndex + 1 + i] = args.Entries[i]
-	}
+	rf.logs = append(rf.logs, args.Entries...)
 	if args.LeaderCommit > rf.commitIndex	{
 		newLogIndex := args.PrevLogIndex + len(args.Entries) 
 		if newLogIndex > args.LeaderCommit	{
@@ -327,10 +332,11 @@ func (rf *Raft) LogReplication()	{
 			//heartbeat为空，可以发送多条提升效率
 			var entry []LogEntry
 			prevLogIndex := rf.nextIndex[server] - 1
+			prevLogTerm := -1
 			if prevLogIndex == 0 {
-				prevLogTerm := -1
+				prevLogTerm = -1
 			}	else{
-				prevLogTerm := rf.logs[prevLogIndex].Term
+				prevLogTerm = rf.logs[prevLogIndex].Term
 			}
 			entry = make([]LogEntry,0)
 			entry = append(entry,rf.logs[rf.nextIndex[server]:]...)
@@ -479,7 +485,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//如果slice的第一个元素为nil会导致gob Encode/Decode为空,这里改为一个空的LogEntry便于编码
 	rf.logs = make([]LogEntry,1)//创建数组
 	temp := LogEntry{}
-	rf.log = append(rf.log, temp)
+	rf.logs = append(rf.logs, temp)
 
 	//volatile state on all servers
 	rf.commitIndex = 0
@@ -561,9 +567,9 @@ func (rf *Raft) applyLog() {
 	//注意这里的for循环，如果写成if那就错了，会无法通过lab-2B的测试。
 	for rf.commitIndex > rf.lastApplied {
 		rf.lastApplied++
-		entry := rf.log[rf.lastApplied]
+		entry := rf.logs[rf.lastApplied]
 		msg := ApplyMsg{
-			Index:   entry.Index,
+			Index:   rf.lastApplied,
 			Command: entry.Command,
 		}
 		rf.applyCh <- msg //applyCh在test_test.go中要用到
