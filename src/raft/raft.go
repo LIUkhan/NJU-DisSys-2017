@@ -224,7 +224,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 			var electionTime time.Duration
 			electionTime = RandElectionTimeout()
 			rf.electionTimeout.Reset(electionTime)
-			fmt.Println("accept")
 	}
 	return
 }
@@ -265,7 +264,6 @@ func (rf *Raft) leaderElection()	{
 				if reply.VoteGranted && rf.state == Candidate {
 					atomic.AddInt32(&votes_sum, 1)
 					if atomic.LoadInt32(&votes_sum) > int32(len(rf.peers)/2) {
-						fmt.Println("become leader:",rf.me)
 						rf.convertState(Leader)
 					}
 				}
@@ -545,6 +543,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						rf.convertState(Candidate)
 					}	else	{
 						//在有多个candidate冲突的情况下，candidate重新在timeout时候重新选举
+						//但是此时任期要增加,补充converState(Candidate)的工作
+						rf.currentTerm++
+						rf.votedFor = rf.me
 						rf.leaderElection()
 					}					
 				}	
@@ -593,6 +594,7 @@ func (rf *Raft) convertState (state uint)	{
 	rf.state = state
 	switch	state	{
 		case Follower:	{
+			fmt.Println(rf.me,"convert2 Follower")
 			rf.votedFor = -1
 			var electionTime time.Duration
 			electionTime = RandElectionTimeout()
@@ -601,12 +603,14 @@ func (rf *Raft) convertState (state uint)	{
 		}
 		case Candidate:	{
 			//rf.electionTimeout不能Stop，因为存在多个candidate冲突后重新选举的情况
+			fmt.Println(rf.me,"convert2 Candidate")
 			rf.currentTerm++
 			rf.votedFor = rf.me
 			fmt.Println(rf.me," ",rf.currentTerm)
 			rf.leaderElection()
 		}
 		case Leader:	{	
+			fmt.Println(rf.me,"convert2 Leader")
 			rf.nextIndex = make([]int,len(rf.peers))
 			for i := 0 ; i < len(rf.peers) ;i++ {
 				rf.nextIndex[i] = len(rf.logs)
