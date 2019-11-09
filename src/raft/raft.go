@@ -24,7 +24,7 @@ import "time"
  import "math/rand"
  import "encoding/gob"
  import "sync/atomic"
- import "fmt"
+//  import "fmt"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -211,15 +211,17 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = (rf.votedFor == args.CandidateID)
 	}	else if args.Term > rf.currentTerm	{
-		rf.convertState(Follower)
-		rf.currentTerm = args.Term
+		// rf.convertState(Follower)
+		// rf.currentTerm = args.Term
+		rf.convertFollower(args.Term)
+
 		if logcheck {
 			rf.votedFor = args.CandidateID
 		}
 		reply.Term = args.Term
 		reply.VoteGranted = (rf.votedFor == args.CandidateID)
 	}
-	fmt.Println(rf.me,"receive request from",args.CandidateID,"Vote for ",rf.votedFor)
+	// fmt.Println(rf.me,"receive request from",args.CandidateID,"Vote for ",rf.votedFor)
 	if reply.VoteGranted {
 			var electionTime time.Duration
 			electionTime = RandElectionTimeout()
@@ -256,15 +258,17 @@ func (rf *Raft) leaderElection()	{
 			if rf.sendRequestVote(server,args,&reply)	{
 				//回复是有问题的情况
 				if reply.Term > rf.currentTerm {
-					rf.currentTerm = reply.Term
-					rf.convertState(Follower)
+					// rf.currentTerm = reply.Term
+					// rf.convertState(Follower)
+					rf.convertFollower(reply.Term)
 					rf.persist()
 				}
 				//回复成功的情况
 				if reply.VoteGranted && rf.state == Candidate {
 					atomic.AddInt32(&votes_sum, 1)
 					if atomic.LoadInt32(&votes_sum) > int32(len(rf.peers)/2) {
-						rf.convertState(Leader)
+						// rf.convertState(Leader)
+						rf.convertLeader()
 					}
 				}
 			}
@@ -273,7 +277,7 @@ func (rf *Raft) leaderElection()	{
 }
 
 //server收到AppendEntries信号时候的处理,要考虑到第一次的情况
-//存在收到该消息的server是leader或者candidate
+//存在收到该消息的server是leader或者candidate的情况一般是follower
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	defer rf.persist()
 	//面对leader信号，一切让步
@@ -282,13 +286,14 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		reply.Success = false
 		return
 	}	else	 {  //但是leader的term不能小
-		rf.currentTerm = args.Term
-		rf.convertState(Follower)
+		// rf.currentTerm = args.Term
+		// rf.convertState(Follower)
+		rf.convertFollower(args.Term)
 	}	
 	//接受到该RPC后重置选举超时,前面的情况不需要重置
-	var electionTime time.Duration
-	electionTime = RandElectionTimeout()
-	rf.electionTimeout.Reset(electionTime)
+	// var electionTime time.Duration
+	// electionTime = RandElectionTimeout()
+	// rf.electionTimeout.Reset(electionTime)
 
 	// fmt.Println(rf.me,"receive log from ",args.LeaderID)
 	
@@ -367,8 +372,9 @@ func (rf *Raft) LogReplication()	{
 					rf.applyLog()
 				}	else	{
 					if(reply.Term > rf.currentTerm)	{
-						rf.convertState(Follower)
-						rf.currentTerm = reply.Term					
+						// rf.convertState(Follower)
+						// rf.currentTerm = reply.Term		
+						rf.convertFollower(reply.Term)			
 					}
 					if	reply.Term != args.PrevLogTerm	{
 						//减少nextindex，由领导人去覆盖,不去做优化,论文中怀疑reply多出的信息的可用性不大
@@ -538,16 +544,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		for	{
 			select	{
 				case <-rf.electionTimeout.C:	{
-					if	rf.state == Follower	{
-						fmt.Println("Electimeout ",rf.me)
-						rf.convertState(Candidate)
-					}	else	{
-						//在有多个candidate冲突的情况下，candidate重新在timeout时候重新选举
-						//但是此时任期要增加,补充converState(Candidate)的工作
-						rf.currentTerm++
-						rf.votedFor = rf.me
-						rf.leaderElection()
-					}					
+					// if	rf.state == Follower	{
+					// 	fmt.Println("Electimeout ",rf.me)
+					// 	rf.convertState(Candidate)
+					// }	else	{
+					// 	//在有多个candidate冲突的情况下，candidate重新在timeout时候重新选举
+					// 	//但是此时任期要增加,补充converState(Candidate)的工作
+					// 	rf.currentTerm++
+					// 	rf.votedFor = rf.me
+					// 	rf.leaderElection()
+					// }				
+					rf.convertCandidate()	
 				}	
 				case <-rf.broadcastTimeout.C:	{
 					if rf.state == Leader	{
@@ -594,7 +601,7 @@ func (rf *Raft) convertState (state uint)	{
 	rf.state = state
 	switch	state	{
 		case Follower:	{
-			fmt.Println(rf.me,"convert2 Follower")
+			// fmt.Println(rf.me,"convert2 Follower")
 			rf.votedFor = -1
 			var electionTime time.Duration
 			electionTime = RandElectionTimeout()
@@ -603,14 +610,14 @@ func (rf *Raft) convertState (state uint)	{
 		}
 		case Candidate:	{
 			//rf.electionTimeout不能Stop，因为存在多个candidate冲突后重新选举的情况
-			fmt.Println(rf.me,"convert2 Candidate")
+			// fmt.Println(rf.me,"convert2 Candidate")
 			rf.currentTerm++
 			rf.votedFor = rf.me
-			fmt.Println(rf.me," ",rf.currentTerm)
+			// fmt.Println(rf.me," ",rf.currentTerm)
 			rf.leaderElection()
 		}
 		case Leader:	{	
-			fmt.Println(rf.me,"convert2 Leader")
+			// fmt.Println(rf.me,"convert2 Leader")
 			rf.nextIndex = make([]int,len(rf.peers))
 			for i := 0 ; i < len(rf.peers) ;i++ {
 				rf.nextIndex[i] = len(rf.logs)
@@ -630,4 +637,46 @@ func RandElectionTimeout ()  time.Duration {
 	// fmt.Println("electimeout:",a)
 	electionTimeout := time.Duration(a) * time.Millisecond
 	return electionTimeout
+}
+
+func (rf *Raft) convertLeader ()	{
+	defer rf.persist()
+	rf.state = Leader
+	// fmt.Println(rf.me,"convert2 Leader ",rf.currentTerm)
+	rf.nextIndex = make([]int,len(rf.peers))
+	for i := 0 ; i < len(rf.peers) ;i++ {
+		rf.nextIndex[i] = len(rf.logs)
+	}
+	rf.matchIndex = make([]int,len(rf.peers))
+	//时钟相关
+	rf.electionTimeout.Stop()
+	//重新开始计时
+	rf.broadcastTimeout.Reset(broadcastTime)
+}
+
+func (rf *Raft) convertCandidate ()	{
+	defer rf.persist()
+	rf.state = Candidate
+	//rf.electionTimeout不能Stop，因为存在多个candidate冲突后重新选举的情况
+	// fmt.Println(rf.me,"convert2 Candidate ",rf.currentTerm)
+	rf.currentTerm++
+	rf.votedFor = rf.me
+	// fmt.Println(rf.me," ",rf.currentTerm)
+	rf.leaderElection()
+}
+
+func (rf *Raft) convertFollower (term int)	{
+	defer rf.persist()
+	//Follower宕机导致任期号十分不一样，也需要及时修改，不应该不改变，所以以下三句不可取，由于该函数集成了term的变化
+	// if	rf.state == Follower	{
+	// 	return
+	// }
+	rf.currentTerm = term
+	rf.state = Follower
+	// fmt.Println(rf.me,"convert2 Follower ",rf.currentTerm)
+	rf.votedFor = -1
+	var electionTime time.Duration
+	electionTime = RandElectionTimeout()
+	rf.electionTimeout.Reset(electionTime)
+	rf.broadcastTimeout.Stop()
 }
