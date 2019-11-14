@@ -20,11 +20,8 @@ package raft
 import "sync"
 import "labrpc"
 import "time"
- import "bytes"
  import "math/rand"
- import "encoding/gob"
  import "sync/atomic"
-//  import "fmt"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -82,21 +79,6 @@ type Raft struct {
     // Timer
     electionTimeout *time.Timer
 	broadcastTimeout *time.Timer
-	//extra 自定义变量
-	repliNum int//用于控制commitIndex是否需要更新
-}
-
-func StateString(s uint) string {
-	if s == Follower	{
-		return "Follower"
-	}
-	if s == Candidate	{
-		return "Candidate"
-	}		
-	if s == Leader	{
-		return "Leader"
-	}	
-	return ""
 }
 
 // return currentTerm and whether this server
@@ -117,33 +99,14 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here.
-	// Example:
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	w := new(bytes.Buffer)
-	e := gob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.logs)
-	 data := w.Bytes()
-	 rf.persister.SaveRaftState(data)
+
 }
 
 //
 // restore previously persisted state.
 //make里面加过锁了，这里不需要再加，否则死锁
 func (rf *Raft) readPersist(data []byte) {
-	// Your code here.
-	// Example:
-	if data == nil || len(data) < 1 {
-		return
-	}
-	r := bytes.NewBuffer(data)
-	d := gob.NewDecoder(r)
-	d.Decode(&rf.currentTerm)
-	d.Decode(&rf.votedFor)
-	d.Decode(&rf.logs)
+
 }
 
 //
@@ -169,10 +132,6 @@ type RequestVoteReply struct {
 type AppendEntriesArgs struct	{
 	Term int
 	LeaderID int
-	PrevLogIndex int
-	PrevLogTerm int
-	Entries []LogEntry
-	LeaderCommit int
 }
 
 type AppendEntriesReply struct	{
@@ -188,7 +147,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	if	rf.state == Leader	{	
 		return
 	}
-	defer rf.persist()
 	logcheck	:=	 true
     if len(rf.logs) > 0 {
 		//日志安全性检查
@@ -211,10 +169,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = (rf.votedFor == args.CandidateID)
 	}	else if args.Term > rf.currentTerm	{
-		// rf.convertState(Follower)
-		// rf.currentTerm = args.Term
 		rf.convertFollower(args.Term)
-
 		if logcheck {
 			rf.votedFor = args.CandidateID
 		}
@@ -258,16 +213,12 @@ func (rf *Raft) leaderElection()	{
 			if rf.sendRequestVote(server,args,&reply)	{
 				//回复是有问题的情况
 				if reply.Term > rf.currentTerm {
-					// rf.currentTerm = reply.Term
-					// rf.convertState(Follower)
 					rf.convertFollower(reply.Term)
-					rf.persist()
 				}
 				//回复成功的情况
 				if reply.VoteGranted && rf.state == Candidate {
 					atomic.AddInt32(&votes_sum, 1)
 					if atomic.LoadInt32(&votes_sum) > int32(len(rf.peers)/2) {
-						// rf.convertState(Leader)
 						rf.convertLeader()
 					}
 				}
@@ -279,52 +230,17 @@ func (rf *Raft) leaderElection()	{
 //server收到AppendEntries信号时候的处理,要考虑到第一次的情况
 //存在收到该消息的server是leader或者candidate的情况一般是follower
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
-	defer rf.persist()
 	//面对leader信号，一切让步
 	if args.Term < rf.currentTerm	{
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
-	}	else	 {  //但是leader的term不能小
-		// rf.currentTerm = args.Term
-		// rf.convertState(Follower)
+	}	else	 { 
+		 //但是leader的term不能小，重置超时
 		rf.convertFollower(args.Term)
 	}	
-	//接受到该RPC后重置选举超时,前面的情况不需要重置
-	// var electionTime time.Duration
-	// electionTime = RandElectionTimeout()
-	// rf.electionTimeout.Reset(electionTime)
-
-	// fmt.Println(rf.me,"receive log from ",args.LeaderID)
-	
-	//根据图7的情况，有可能少了很多份日志，也有可能多了
-	lastLogIndex := len(rf.logs) - 1
-	if lastLogIndex < args.PrevLogIndex	{
-		reply.Term = rf.currentTerm
-		reply.Success = false
-		return
-	}
-	//排除第一次发送日志没有prevlogterm的情况，多了和不匹配的情况处理如下
-	if	args.PrevLogTerm != 0 && args.PrevLogTerm != rf.logs[args.PrevLogIndex].Term	{
-		reply.Term = rf.currentTerm
-		reply.Success = false
-		return
-	}
 	reply.Term = rf.currentTerm
-	reply.Success = true
-	//非心跳
-	if	len(args.Entries) >= 1 {
-		rf.logs = append(rf.logs, args.Entries...)
-		if args.LeaderCommit > rf.commitIndex	{
-			newLogIndex := args.PrevLogIndex + len(args.Entries) 
-			if newLogIndex > args.LeaderCommit	{
-				rf.commitIndex = args.LeaderCommit
-			}	else	{
-				rf.commitIndex = newLogIndex
-			}
-		}	
-		rf.applyLog()
-	}	
+	reply.Success = true	
 	return
 }
 
@@ -338,74 +254,20 @@ func (rf *Raft) LogReplication()	{
 			//由于采用时钟驱动的goroutine，因此传入的rf需要筛选出leader
 			if rf.state != Leader {
 				return
-			}
-			//heartbeat为空，可以发送多条提升效率
-			var entry []LogEntry
-			prevLogIndex := rf.nextIndex[server] - 1
-			var prevLogTerm int
-			if prevLogIndex == 0 {
-				prevLogTerm = -1
-			}	else{
-				prevLogTerm = rf.logs[prevLogIndex].Term
-			}
-
-			entry = make([]LogEntry,0)
-			entry = append(entry,rf.logs[rf.nextIndex[server]:]...)
-			
+			}		
 			args :=	AppendEntriesArgs{
 				rf.currentTerm,
 				rf.me,
-				prevLogIndex,
-				prevLogTerm,
-				entry,
-				rf.commitIndex,
 			}
 
 			var reply AppendEntriesReply
 			if rf.sendAppendEntries(server,args,&reply)	{
-				if reply.Success	{
-					rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)//len(rf.logs) - 1
-					rf.nextIndex[server] = rf.matchIndex[server]  + 1//len(rf.logs)
-					threhold := len(rf.peers)/2 + 1
-					//限制是为了防止图8的问题）旧的已经复制到大多数服务器的日志被覆盖
-					rf.commitIndex = rf.updateCommitIndex(threhold)
-					rf.applyLog()
-				}	else	{
 					if(reply.Term > rf.currentTerm)	{
-						// rf.convertState(Follower)
-						// rf.currentTerm = reply.Term		
 						rf.convertFollower(reply.Term)			
-					}
-					if	reply.Term != args.PrevLogTerm	{
-						//减少nextindex，由领导人去覆盖,不去做优化,论文中怀疑reply多出的信息的可用性不大
-						if rf.nextIndex[server] > 0	{
-							rf.nextIndex[server]--//这样可以做到已经存在的日志条目和新的产生冲突（索引值相同但是任期号不同），删除这一条和之后所有的 
-						}							
-					}
 				}
-				rf.persist()
 			}
 		}(i,rf)
 	}
-}
-
-
-//外面需要加锁
-func (rf *Raft) updateCommitIndex(threhold int) int{
-	for i := len(rf.logs) - 1; i > rf.commitIndex; i-- {
-		support := 0
-		for _, matchIndex := range rf.matchIndex {
-			if matchIndex >= i {
-				support++
-			}
-		}  
-		//必须保证日志在大多数服务器并且是当前任期的日志
-		if support > threhold {
-			rf.repliNum = 0
-			return	i
-		}
-	}
-	return rf.commitIndex
 }
 
 //
@@ -456,20 +318,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index :=  -1
 	term := rf.currentTerm
 	isLeader := (rf.state == Leader)
-	// var index,term int
-	// var isLeader bool
-	if isLeader {
-			index =  len(rf.logs) 
-			entry := LogEntry{
-				Term:    term,
-				Command: command,
-			}
-			rf.logs = append(rf.logs, entry)
-			rf.matchIndex[rf.me] = index
-			rf.nextIndex[rf.me] = index + 1
-			rf.persist()
-			rf.LogReplication()
-	}
 	return index, term, isLeader
 }
 
@@ -517,10 +365,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	//volatile state on leaders初始化数组
 	rf.nextIndex = make([]int, len(rf.peers))
-	//默认rf.lastApplied =0所以说，0号索引位置不能用，从1开始
-	for i := range rf.nextIndex {
-		rf.nextIndex[i] = 1
-	}
     rf.matchIndex = make([]int, len(rf.peers))
 	rf.applyCh = applyCh
 
@@ -536,24 +380,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.broadcastTimeout = time.NewTimer(broadcastTime)
 	rf.broadcastTimeout.Stop()
 
-	//extra
-	rf.repliNum = 0
-	rf.persist()
-
 	go func(rf *Raft)	{
 		for	{
 			select	{
-				case <-rf.electionTimeout.C:	{
-					// if	rf.state == Follower	{
-					// 	fmt.Println("Electimeout ",rf.me)
-					// 	rf.convertState(Candidate)
-					// }	else	{
-					// 	//在有多个candidate冲突的情况下，candidate重新在timeout时候重新选举
-					// 	//但是此时任期要增加,补充converState(Candidate)的工作
-					// 	rf.currentTerm++
-					// 	rf.votedFor = rf.me
-					// 	rf.leaderElection()
-					// }				
+				case <-rf.electionTimeout.C:	{				
 					rf.convertCandidate()	
 				}	
 				case <-rf.broadcastTimeout.C:	{
@@ -570,84 +400,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-
-// 对于所有服务器都需要执行的,执行前外部需要解锁
-func (rf *Raft) applyLog() {
-	if(rf.commitIndex > rf.lastApplied)	{
-		entriesToApply := append([]LogEntry{}, rf.logs[rf.lastApplied+1:rf.commitIndex+1]...)
-		beginningIdx := rf.lastApplied+1
-		go func(beginningIdx int,entries []LogEntry,rf *Raft)	{
-			for idx,entry := range entries	{
-				msg := ApplyMsg{
-					Index:   beginningIdx+idx,
-					Command: entry.Command,
-				}
-				rf.applyCh <- msg 
-				if rf.lastApplied < msg.Index {
-					rf.lastApplied = msg.Index
-				}
-			}
-		}(beginningIdx,entriesToApply,rf)
-	}	
-}
-
-//状态、时钟、candidate任期、投票状态、领导人初始化nextindex和matchindex
-//外界上锁
-func (rf *Raft) convertState (state uint)	{
-	defer rf.persist()
-	if state == rf.state {
-		return
-	}
-	rf.state = state
-	switch	state	{
-		case Follower:	{
-			// fmt.Println(rf.me,"convert2 Follower")
-			rf.votedFor = -1
-			var electionTime time.Duration
-			electionTime = RandElectionTimeout()
-			rf.electionTimeout.Reset(electionTime)
-			rf.broadcastTimeout.Stop()
-		}
-		case Candidate:	{
-			//rf.electionTimeout不能Stop，因为存在多个candidate冲突后重新选举的情况
-			// fmt.Println(rf.me,"convert2 Candidate")
-			rf.currentTerm++
-			rf.votedFor = rf.me
-			// fmt.Println(rf.me," ",rf.currentTerm)
-			rf.leaderElection()
-		}
-		case Leader:	{	
-			// fmt.Println(rf.me,"convert2 Leader")
-			rf.nextIndex = make([]int,len(rf.peers))
-			for i := 0 ; i < len(rf.peers) ;i++ {
-				rf.nextIndex[i] = len(rf.logs)
-			}
-			rf.matchIndex = make([]int,len(rf.peers))
-			//时钟相关
-			rf.electionTimeout.Stop()
-			//重新开始计时
-			rf.broadcastTimeout.Reset(broadcastTime)
-		}
-	}
-}
-
 func RandElectionTimeout ()  time.Duration {
 	// 获取随机数
 	a := 300 + rand.Intn(200)  // [300,500)
-	// fmt.Println("electimeout:",a)
 	electionTimeout := time.Duration(a) * time.Millisecond
 	return electionTimeout
 }
 
 func (rf *Raft) convertLeader ()	{
-	defer rf.persist()
 	rf.state = Leader
-	// fmt.Println(rf.me,"convert2 Leader ",rf.currentTerm)
-	rf.nextIndex = make([]int,len(rf.peers))
-	for i := 0 ; i < len(rf.peers) ;i++ {
-		rf.nextIndex[i] = len(rf.logs)
-	}
-	rf.matchIndex = make([]int,len(rf.peers))
 	//时钟相关
 	rf.electionTimeout.Stop()
 	//重新开始计时
@@ -655,25 +416,20 @@ func (rf *Raft) convertLeader ()	{
 }
 
 func (rf *Raft) convertCandidate ()	{
-	defer rf.persist()
 	rf.state = Candidate
 	//rf.electionTimeout不能Stop，因为存在多个candidate冲突后重新选举的情况
-	// fmt.Println(rf.me,"convert2 Candidate ",rf.currentTerm)
 	rf.currentTerm++
 	rf.votedFor = rf.me
-	// fmt.Println(rf.me," ",rf.currentTerm)
 	rf.leaderElection()
 }
 
 func (rf *Raft) convertFollower (term int)	{
-	defer rf.persist()
 	//Follower宕机导致任期号十分不一样，也需要及时修改，不应该不改变，所以以下三句不可取，由于该函数集成了term的变化
 	// if	rf.state == Follower	{
 	// 	return
 	// }
 	rf.currentTerm = term
 	rf.state = Follower
-	// fmt.Println(rf.me,"convert2 Follower ",rf.currentTerm)
 	rf.votedFor = -1
 	var electionTime time.Duration
 	electionTime = RandElectionTimeout()
