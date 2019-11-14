@@ -109,7 +109,6 @@ func (rf *Raft) readPersist(data []byte) {
 
 }
 
-//
 // example RequestVote RPC arguments structure.
 //
 type RequestVoteArgs struct {
@@ -147,15 +146,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	if	rf.state == Leader	{	
 		return
 	}
-	logcheck	:=	 true
-    if len(rf.logs) > 0 {
-		//日志安全性检查
-		//最新的日志的任期号要小于候选者的，等于的情况下要长度要小，否则candidate886
-        if (rf.logs[len(rf.logs)-1].Term > args.LastLogTerm) ||
-            (rf.logs[len(rf.logs)-1].Term == args.LastLogTerm && len(rf.logs)-1 > args.LastLogIndex) {
-				logcheck = false
-        }
-	}
 	//任期检查，日志和当前任期关系不大,决定replyRPC的情况
 	//当前server任期比candidate大 false
 	if args.Term < rf.currentTerm	{
@@ -163,14 +153,16 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 	}	else if args.Term == rf.currentTerm	{
 		//还没投票
-		if rf.votedFor == -1  && logcheck {
+		if rf.votedFor == -1  {
 			rf.votedFor = args.CandidateID
 		}
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = (rf.votedFor == args.CandidateID)
 	}	else if args.Term > rf.currentTerm	{
-		rf.convertFollower(args.Term)
-		if logcheck {
+		if rf.state != Follower	{
+			rf.convertFollower(args.Term)
+		}
+		if rf.votedFor == -1  {
 			rf.votedFor = args.CandidateID
 		}
 		reply.Term = args.Term
