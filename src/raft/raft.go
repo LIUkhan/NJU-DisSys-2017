@@ -213,9 +213,11 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	}	else if args.Term > rf.currentTerm	{
 		// rf.convertState(Follower)
 		// rf.currentTerm = args.Term
-		rf.convertFollower(args.Term)
+		if rf.state != Follower	{
+			rf.convertFollower(args.Term)
+		}
 
-		if logcheck {
+		if rf.votedFor == -1 && logcheck {
 			rf.votedFor = args.CandidateID
 		}
 		reply.Term = args.Term
