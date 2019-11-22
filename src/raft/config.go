@@ -335,6 +335,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			}
 			count += 1
 			cmd = cmd1
+			fmt.Println(i," ",count,"ncommited ",cmd)
 		}
 	}
 	return count, cmd
@@ -385,6 +386,7 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 	for time.Since(t0).Seconds() < 10 {
 		// try all the servers, maybe one is the leader.
 		index := -1
+		//找leader，发command命令然后break
 		for si := 0; si < cfg.n; si++ {
 			starts = (starts + 1) % cfg.n
 			var rf *Raft

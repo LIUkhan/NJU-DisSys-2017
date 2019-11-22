@@ -141,10 +141,12 @@ func TestFailNoAgree(t *testing.T) {
 
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
+	fmt.Println("leader:",leader)
+	
 	cfg.disconnect((leader + 1) % servers)
 	cfg.disconnect((leader + 2) % servers)
 	cfg.disconnect((leader + 3) % servers)
-
+	fmt.Println("-----------------------------------------1")
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
 		t.Fatalf("leader rejected Start()")
@@ -164,6 +166,8 @@ func TestFailNoAgree(t *testing.T) {
 	cfg.connect((leader + 1) % servers)
 	cfg.connect((leader + 2) % servers)
 	cfg.connect((leader + 3) % servers)
+
+	fmt.Println("-----------------------------------------2")
 
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
