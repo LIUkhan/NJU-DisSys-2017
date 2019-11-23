@@ -335,7 +335,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			}
 			count += 1
 			cmd = cmd1
-			fmt.Println(i," ",count,"ncommited ",cmd)
+			// fmt.Println(i," ",count,"ncommited ",cmd)
 		}
 	}
 	return count, cmd
@@ -407,9 +407,11 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 		if index != -1 {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
+			//大多数server commit就返回
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				// fmt.Println("agreement:",nd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {
