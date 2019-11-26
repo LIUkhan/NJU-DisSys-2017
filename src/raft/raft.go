@@ -24,7 +24,7 @@ import "time"
  import "math/rand"
  import "encoding/gob"
  import "sync/atomic"
- import "fmt"
+//  import "fmt"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -273,7 +273,7 @@ func (rf *Raft) leaderElection()	{
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	defer rf.persist()
 	if args.Term < rf.currentTerm	{//但是leader的term不能小
-		fmt.Println("args.Term < rf.currentTerm")
+		// fmt.Println("args.Term < rf.currentTerm")
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
@@ -287,7 +287,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	// electionTime = RandElectionTimeout()
 	// rf.electionTimeout.Reset(electionTime)
 
-	fmt.Println(rf.me,"receive log from ",args.LeaderID)
+	// fmt.Println(rf.me,"receive log from ",args.LeaderID)
 	//根据图7的情况，有可能少了很多份日志，也有可能多了，少了情况如下
 	lastLogIndex := len(rf.logs) - 1
 	if lastLogIndex < args.PrevLogIndex	{
@@ -298,7 +298,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	}
 	//排除第一次发送日志没有prevlogterm的情况，多了和不匹配的情况处理如下
 	if	args.PrevLogTerm != -1 && args.PrevLogTerm != rf.logs[args.PrevLogIndex].Term	{  
-		fmt.Println("args.PrevLogTerm != rf.logs[args.PrevLogIndex].Term")
+		// fmt.Println("args.PrevLogTerm != rf.logs[args.PrevLogIndex].Term")
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
@@ -315,12 +315,12 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		}
 		rf.logs = rf.logs[:cut]
 		rf.logs = append(rf.logs, args.Entries...)
-		fmt.Println(rf.me," loglength:",len(args.Entries),"lengthoflog:",len(rf.logs))
-		for i := 0; i < len(args.Entries);  i++	{
-			fmt.Println(args.Entries[i])
-		}
+		// fmt.Println(rf.me," loglength:",len(args.Entries),"lengthoflog:",len(rf.logs))
+		// for i := 0; i < len(args.Entries);  i++	{
+		// 	fmt.Println(args.Entries[i])
+		// }
 	}	else	{
-		fmt.Println("now:",len(rf.logs)-1 ," ",args.LeaderCommit)
+		// fmt.Println("now:",len(rf.logs)-1 ," ",args.LeaderCommit)
 		if args.LeaderCommit > rf.commitIndex	{
 			newLogIndex := len(rf.logs)-1//args.PrevLogIndex + len(args.Entries) 
 			if newLogIndex > args.LeaderCommit	{
@@ -433,7 +433,7 @@ func (rf *Raft) applyLog() {
 	if(rf.commitIndex > rf.lastApplied)	{
 		entriesToApply := append([]LogEntry{}, rf.logs[rf.lastApplied+1:rf.commitIndex+1]...)
 		beginningIdx := rf.lastApplied+1
-		fmt.Println(rf.me," apply log from ",beginningIdx," to ",rf.commitIndex+1,"len:",len(entriesToApply))
+		// fmt.Println(rf.me," apply log from ",beginningIdx," to ",rf.commitIndex+1,"len:",len(entriesToApply))
 
 		go func(beginningIdx int,entries []LogEntry,rf *Raft)	{
 			for idx,entry := range entries	{
@@ -442,12 +442,12 @@ func (rf *Raft) applyLog() {
 					Command: entry.Command,
 				}
 
-				fmt.Println(rf.me,"command   ",msg.Command)
+				// fmt.Println(rf.me,"command   ",msg.Command)
 				rf.applyCh <- msg
 
 				if rf.lastApplied < msg.Index {
 					rf.lastApplied = msg.Index
-					fmt.Println("last:",rf.lastApplied)
+					// fmt.Println("last:",rf.lastApplied)
 				}
 			}
 		}(beginningIdx,entriesToApply,rf)
@@ -496,16 +496,14 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 //不是leader返回false，是leader同意提交并快速返回，log进入集群的入口，只能从
 //leader节点进入
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
-
 	index :=  -1
 	term := rf.currentTerm
 	isLeader := (rf.state == Leader)
 	// var index,term int
 	// var isLeader bool
 	if isLeader && command != nil {
-		    fmt.Println("before leader append:",len(rf.logs) )
+			rf.mu.Lock()
+		    // fmt.Println("before leader append:",len(rf.logs) )
 			index =  len(rf.logs) 
 			entry := LogEntry{
 				Term:    term,
@@ -520,7 +518,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			if rf.nextIndex[rf.me] < 1	{
 				rf.nextIndex[rf.me] = 1
 			}
-			fmt.Println("leader append:",len(rf.logs)," command ",entry.Command)
+			// fmt.Println("leader append:",len(rf.logs)," command ",entry.Command)
+			rf.mu.Unlock()
 			rf.persist()
 			// rf.LogReplication()
 	} 
@@ -627,7 +626,7 @@ func RandElectionTimeout ()  time.Duration {
 func (rf *Raft) convertLeader ()	{
 	defer rf.persist()
 	rf.state = Leader
-	fmt.Println(rf.me,"convert2 Leader ",rf.currentTerm)
+	// fmt.Println(rf.me,"convert2 Leader ",rf.currentTerm)
 	rf.nextIndex = make([]int,len(rf.peers))
 	rf.matchIndex = make([]int,len(rf.peers))
 	for i := 0 ; i < len(rf.peers) ;i++ {
@@ -651,7 +650,7 @@ func (rf *Raft) convertCandidate ()	{
 	//rf.electionTimeout不能Stop，因为存在多个candidate冲突后重新选举的情况
 	rf.currentTerm++
 	rf.votedFor = rf.me
-	fmt.Println(rf.me,"convert2 Candidate ",rf.currentTerm)
+	// fmt.Println(rf.me,"convert2 Candidate ",rf.currentTerm)
 	rf.leaderElection()
 }
 
